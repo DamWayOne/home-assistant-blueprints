@@ -1,0 +1,426 @@
+# Lauflicht V2: Automation-Blueprint für Home Assistant
+blueprint:
+  name: Lauflicht V2 – 7 Effekte
+  description: |-
+    Sieben Effekte für eine geordnete Liste einzelner Leuchten. EIN am ausgewählten input_boolean startet einen Lauf. AUS stoppt auch während der Wartezeit und schaltet alle ausgewählten Leuchten ohne Transition aus. Geschwindigkeit 0,2–10 s; Helligkeit, optionale RGB-Farbe, Richtung, Transition und Schweiflänge einstellbar. Wiederholungen: 0 = endlos, sonst feste Durchlaufzahl. Zufall besucht jede Leuchte einmal pro Durchlauf. Hin-und-Her pendelt ohne doppelte Endpunkte; ein Durchlauf umfasst n + max(n-2, 0) Schritte. Aufbauen/Abbauen schaltet in Laufrichtung ein und wieder aus. Nacheinander EIN endet regulär mit allen Leuchten an, Nacheinander AUS mit allen aus. Alle anderen Effekte enden mit allen aus. Der Helfer wird bei regulärem Ende ausgeschaltet.
+
+    Start-/Stop-Helfer unter Einstellungen > Geräte & Dienste > Helfer als Schalter erstellen. Zum Stoppen diesen Helfer ausschalten, nicht die Automation deaktivieren. Deaktivieren/Neuladen der Automation oder ein Home-Assistant-Neustart bricht Aktionen ohne garantierte Aufräumphase ab. Ein bereits eingeschalteter Helfer startet nach einem Neustart nicht automatisch: erst AUS, dann EIN. Pro Helfer/Leuchtengruppe nur eine Lauflicht-Automation betreiben. Die Automation verändert die Leuchtenzustände; vorherige Zustände werden nicht wiederhergestellt. Lampenfehler werden übersprungen, andere Leuchten laufen weiter. Gerätelatenzen und Transition-Unterstützung hängen von der Integration ab.
+  domain: automation
+  homeassistant:
+    min_version: 2024.10.0
+  input:
+    lights:
+      name: Leuchten in Laufreihenfolge
+      selector:
+        entity:
+          filter:
+          - domain: light
+          multiple: true
+      description: Einzelne Leuchten auswählen. Die Reihenfolge der entity_id-Liste bestimmt den Laufweg;
+        bei Bedarf in der YAML-Konfiguration der Automation umsortieren. Keine überlappenden Lichtgruppen
+        verwenden.
+    run_switch:
+      name: Start-/Stop-Helfer
+      selector:
+        entity:
+          filter:
+          - domain: input_boolean
+      description: Eigenen Schalter-Helfer anlegen. EIN startet, AUS stoppt und schaltet alle ausgewählten
+        Leuchten aus. Pro Automation einen eigenen Helfer verwenden.
+    effect:
+      name: Beleuchtungseffekt
+      selector:
+        select:
+          options:
+          - value: classic
+            label: Klassisches Lauflicht
+          - value: tail
+            label: Schweif
+          - value: build
+            label: Aufbauen/Abbauen
+          - value: random
+            label: Zufall
+          - value: bounce
+            label: Hin-und-Her
+          - value: 'on'
+            label: Leuchten nacheinander EIN
+          - value: 'off'
+            label: Leuchten nacheinander AUS
+      default: classic
+    speed:
+      name: Zeit zwischen den Schritten
+      selector:
+        number:
+          min: 0.2
+          max: 10
+          step: 0.1
+          mode: slider
+          unit_of_measurement: s
+      default: 1
+    brightness:
+      name: Helligkeit
+      selector:
+        number:
+          min: 1
+          max: 100
+          step: 1
+          mode: slider
+          unit_of_measurement: '%'
+      default: 80
+      description: Wirkt bei dimmbaren Leuchten; reine Ein-/Aus-Leuchten verwenden ihre normale Helligkeit.
+    use_rgb:
+      name: RGB-Farbe verwenden
+      selector:
+        boolean: {}
+      default: false
+      description: Ohne diese Option bleibt die gespeicherte Farbe der Leuchte erhalten. RGB wird nur
+        an farbfähige Leuchten gesendet.
+    rgb:
+      name: RGB-Farbe
+      selector:
+        color_rgb: {}
+      default:
+      - 255
+      - 160
+      - 40
+    direction:
+      name: Richtung
+      selector:
+        select:
+          options:
+          - value: forward
+            label: Vorwärts
+          - value: reverse
+            label: Rückwärts
+      default: forward
+      description: Bei Zufall ohne Auswirkung; bei Hin-und-Her die anfängliche Richtung.
+    transition:
+      name: Übergangsdauer
+      selector:
+        number:
+          min: 0
+          max: 10
+          step: 0.1
+          mode: slider
+          unit_of_measurement: s
+      default: 0
+      description: Nur bei Leuchten mit Transition-Unterstützung. Für getrennte Schritte höchstens die
+        Schrittzeit wählen; längere Übergänge überlappen.
+    tail_length:
+      name: Schweiflänge
+      selector:
+        number:
+          min: 2
+          max: 5
+          step: 1
+          mode: slider
+      default: 3
+      description: Schweif wächst am Anfang und läuft am Ende vollständig aus. Bei weniger Leuchten entsprechend
+        kürzer.
+    repetitions:
+      name: Wiederholungen
+      selector:
+        number:
+          min: 0
+          max: 1000
+          step: 1
+          mode: slider
+      default: 1
+      description: 0 = Endlosschleife bis zum Ausschalten des Start-/Stop-Helfers. 1 = ein vollständiger
+        Durchlauf.
+mode: single
+max_exceeded: silent
+triggers:
+- trigger: state
+  entity_id: !input 'run_switch'
+  to: 'on'
+variables:
+  lights: !input 'lights'
+  run_switch: !input 'run_switch'
+  effect: !input 'effect'
+  speed: !input 'speed'
+  brightness: !input 'brightness'
+  use_rgb: !input 'use_rgb'
+  rgb: !input 'rgb'
+  direction: !input 'direction'
+  transition: !input 'transition'
+  tail_length: !input 'tail_length'
+  repetitions: !input 'repetitions'
+conditions: []
+actions:
+- variables:
+    ordered: '{{ (lights | unique | list) if direction == ''forward'' else (lights | unique | list | reverse
+      | list) }}'
+- if:
+  - condition: template
+    value_template: '{{ ordered | count == 0 }}'
+  then:
+  - action: input_boolean.turn_off
+    target:
+      entity_id: !input 'run_switch'
+  - stop: Keine Leuchten ausgewählt.
+    error: true
+- if:
+  - condition: template
+    value_template: '{{ not is_state(run_switch, ''on'') }}'
+  then:
+  - action: light.turn_off
+    continue_on_error: true
+    target:
+      entity_id: '{{ ordered }}'
+    data:
+      transition: 0
+  - action: input_boolean.turn_off
+    target:
+      entity_id: !input 'run_switch'
+  - stop: Lauflicht gestoppt; ausgewählte Leuchten ausgeschaltet.
+- repeat:
+    while:
+    - condition: template
+      value_template: '{{ is_state(run_switch, ''on'') and ((repetitions | int == 0) or repeat.index <=
+        repetitions | int) }}'
+    sequence:
+    - if:
+      - condition: template
+        value_template: '{{ not is_state(run_switch, ''on'') }}'
+      then:
+      - action: light.turn_off
+        continue_on_error: true
+        target:
+          entity_id: '{{ ordered }}'
+        data:
+          transition: 0
+      - action: input_boolean.turn_off
+        target:
+          entity_id: !input 'run_switch'
+      - stop: Lauflicht gestoppt; ausgewählte Leuchten ausgeschaltet.
+    - variables:
+        cycle_number: '{{ repeat.index }}'
+        frames: |-
+          {% set ns = namespace(frames=[], pool=ordered, shuffled=[]) %}
+          {% set n = ordered | count %}
+          {% if effect == 'random' %}
+            {% for unused in range(n) %}
+              {% set chosen = ns.pool | random %}
+              {% set ns.shuffled = ns.shuffled + [chosen] %}
+              {% set ns.pool = ns.pool | reject('equalto', chosen) | list %}
+            {% endfor %}
+            {% for lamp in ns.shuffled %}
+              {% set ns.frames = ns.frames + [[lamp]] %}
+            {% endfor %}
+          {% elif effect == 'tail' %}
+            {% set k = [tail_length | int, n] | min %}
+            {% for i in range(n + k - 1) %}
+              {% set start = [0, i - k + 1] | max %}
+              {% set end = [n, i + 1] | min %}
+              {% set ns.frames = ns.frames + [ordered[start:end]] %}
+            {% endfor %}
+          {% elif effect == 'build' %}
+            {% for i in range(n) %}
+              {% set ns.frames = ns.frames + [ordered[:i+1]] %}
+            {% endfor %}
+            {% for i in range(n) %}
+              {% set ns.frames = ns.frames + [ordered[i+1:]] %}
+            {% endfor %}
+          {% elif effect == 'bounce' %}
+            {% for i in range(n) %}
+              {% set ns.frames = ns.frames + [[ordered[i]]] %}
+            {% endfor %}
+            {% for i in range(n-2, 0, -1) %}
+              {% set ns.frames = ns.frames + [[ordered[i]]] %}
+            {% endfor %}
+          {% elif effect == 'on' %}
+            {% for i in range(n) %}
+              {% set ns.frames = ns.frames + [ordered[:i+1]] %}
+            {% endfor %}
+          {% elif effect == 'off' %}
+            {% for i in range(n) %}
+              {% set ns.frames = ns.frames + [ordered[i+1:]] %}
+            {% endfor %}
+          {% else %}
+            {% for lamp in ordered %}
+              {% set ns.frames = ns.frames + [[lamp]] %}
+            {% endfor %}
+          {% endif %}
+          {{ ns.frames }}
+    - if:
+      - condition: template
+        value_template: '{{ effect in [''on'', ''off''] or cycle_number == 1 }}'
+      then:
+      - action: light.turn_off
+        continue_on_error: true
+        target:
+          entity_id: '{{ ordered }}'
+        data:
+          transition: 0
+    - if:
+      - condition: template
+        value_template: '{{ effect == ''off'' }}'
+      then:
+      - variables:
+          active: '{{ ordered }}'
+      - repeat:
+          for_each: '{{ active }}'
+          sequence:
+          - if:
+            - condition: template
+              value_template: '{{ not is_state(run_switch, ''on'') }}'
+            then:
+            - action: light.turn_off
+              continue_on_error: true
+              target:
+                entity_id: '{{ ordered }}'
+              data:
+                transition: 0
+            - action: input_boolean.turn_off
+              target:
+                entity_id: !input 'run_switch'
+            - stop: Lauflicht gestoppt; ausgewählte Leuchten ausgeschaltet.
+          - action: light.turn_on
+            continue_on_error: true
+            target:
+              entity_id: '{{ repeat.item }}'
+            data: |-
+              {% set modes = state_attr(repeat.item, 'supported_color_modes') or [] %}
+              {% set ns = namespace(data={}) %}
+              {% if modes | reject('in', ['onoff', 'unknown']) | list | count > 0 %}
+                {% set ns.data = dict(ns.data, brightness_pct=brightness | int) %}
+              {% endif %}
+              {% if use_rgb and modes | select('in', ['hs', 'xy', 'rgb', 'rgbw', 'rgbww']) | list | count > 0 %}
+                {% set ns.data = dict(ns.data, rgb_color=rgb) %}
+              {% endif %}
+              {% if (state_attr(repeat.item, 'supported_features') | int(0)) | bitwise_and(32) %}
+                {% set ns.data = dict(ns.data, transition=transition | float) %}
+              {% endif %}
+              {{ ns.data }}
+      - wait_template: '{{ not is_state(run_switch, ''on'') }}'
+        timeout:
+          seconds: '{{ speed | float }}'
+        continue_on_timeout: true
+      - if:
+        - condition: template
+          value_template: '{{ wait.completed }}'
+        then:
+        - action: light.turn_off
+          continue_on_error: true
+          target:
+            entity_id: '{{ ordered }}'
+          data:
+            transition: 0
+        - action: input_boolean.turn_off
+          target:
+            entity_id: !input 'run_switch'
+        - stop: Lauflicht gestoppt; ausgewählte Leuchten ausgeschaltet.
+    - repeat:
+        for_each: '{{ frames }}'
+        sequence:
+        - if:
+          - condition: template
+            value_template: '{{ not is_state(run_switch, ''on'') }}'
+          then:
+          - action: light.turn_off
+            continue_on_error: true
+            target:
+              entity_id: '{{ ordered }}'
+            data:
+              transition: 0
+          - action: input_boolean.turn_off
+            target:
+              entity_id: !input 'run_switch'
+          - stop: Lauflicht gestoppt; ausgewählte Leuchten ausgeschaltet.
+        - variables:
+            active: '{{ repeat.item }}'
+            inactive: '{{ ordered | reject(''in'', repeat.item) | list }}'
+        - if:
+          - condition: template
+            value_template: '{{ inactive | count > 0 }}'
+          then:
+          - action: light.turn_off
+            continue_on_error: true
+            target:
+              entity_id: '{{ inactive }}'
+            data:
+              transition: '{{ transition | float }}'
+        - if:
+          - condition: template
+            value_template: '{{ active | count > 0 }}'
+          then:
+          - repeat:
+              for_each: '{{ active }}'
+              sequence:
+              - if:
+                - condition: template
+                  value_template: '{{ not is_state(run_switch, ''on'') }}'
+                then:
+                - action: light.turn_off
+                  continue_on_error: true
+                  target:
+                    entity_id: '{{ ordered }}'
+                  data:
+                    transition: 0
+                - action: input_boolean.turn_off
+                  target:
+                    entity_id: !input 'run_switch'
+                - stop: Lauflicht gestoppt; ausgewählte Leuchten ausgeschaltet.
+              - action: light.turn_on
+                continue_on_error: true
+                target:
+                  entity_id: '{{ repeat.item }}'
+                data: |-
+                  {% set modes = state_attr(repeat.item, 'supported_color_modes') or [] %}
+                  {% set ns = namespace(data={}) %}
+                  {% if modes | reject('in', ['onoff', 'unknown']) | list | count > 0 %}
+                    {% set ns.data = dict(ns.data, brightness_pct=brightness | int) %}
+                  {% endif %}
+                  {% if use_rgb and modes | select('in', ['hs', 'xy', 'rgb', 'rgbw', 'rgbww']) | list | count > 0 %}
+                    {% set ns.data = dict(ns.data, rgb_color=rgb) %}
+                  {% endif %}
+                  {% if (state_attr(repeat.item, 'supported_features') | int(0)) | bitwise_and(32) %}
+                    {% set ns.data = dict(ns.data, transition=transition | float) %}
+                  {% endif %}
+                  {{ ns.data }}
+        - wait_template: '{{ not is_state(run_switch, ''on'') }}'
+          timeout:
+            seconds: '{{ speed | float }}'
+          continue_on_timeout: true
+        - if:
+          - condition: template
+            value_template: '{{ wait.completed }}'
+          then:
+          - action: light.turn_off
+            continue_on_error: true
+            target:
+              entity_id: '{{ ordered }}'
+            data:
+              transition: 0
+          - action: input_boolean.turn_off
+            target:
+              entity_id: !input 'run_switch'
+          - stop: Lauflicht gestoppt; ausgewählte Leuchten ausgeschaltet.
+- if:
+  - condition: template
+    value_template: '{{ not is_state(run_switch, ''on'') }}'
+  then:
+  - action: light.turn_off
+    continue_on_error: true
+    target:
+      entity_id: '{{ ordered }}'
+    data:
+      transition: 0
+  - action: input_boolean.turn_off
+    target:
+      entity_id: !input 'run_switch'
+  - stop: Lauflicht gestoppt; ausgewählte Leuchten ausgeschaltet.
+- if:
+  - condition: template
+    value_template: '{{ effect != ''on'' }}'
+  then:
+  - action: light.turn_off
+    continue_on_error: true
+    target:
+      entity_id: '{{ ordered }}'
+    data:
+      transition: 0
+- action: input_boolean.turn_off
+  target:
+    entity_id: !input 'run_switch'
