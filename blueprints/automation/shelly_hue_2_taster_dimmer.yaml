@@ -184,9 +184,19 @@ actions:
           - condition: template
             value_template: "{{ event_type == 'double_push' }}"
         sequence:
-          - action: input_boolean.toggle
-            target:
-              entity_id: !input mode_helper
+          - choose:
+              - conditions:
+                  - condition: state
+                    entity_id: !input mode_helper
+                    state: "off"
+                sequence:
+                  - action: input_boolean.turn_on
+                    target:
+                      entity_id: !input mode_helper
+            default:
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: !input mode_helper
       - conditions:
           - condition: template
             value_template: "{{ event_type == 'single_push' and is_one }}"
