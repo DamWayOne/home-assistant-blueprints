@@ -1,0 +1,260 @@
+blueprint:
+  name: "Shelly 2-Taster: Hue Dimmen, Farbtemperatur und Tagesprofile"
+  description: >
+    Zwei Shelly-Taster mit Event-Entitäten (Shelly Gen2/Gen3, sofern unterstützt).
+    Taster 1: kurz EIN, lang heller / wärmer. Taster 2: kurz AUS,
+    lang dunkler / kälter. Doppel-Klick auf einem der Taster schaltet
+    den Modus (Helligkeit / Farbtemperatur) um. Bei aktivierten Tagesprofilen
+    erhält ein kurzer EIN-Klick zeitabhängige Helligkeit und Farbtemperatur.
+    Ohne Tagesprofile wird light.turn_on ohne Parameter aufgerufen (die Lampe
+    entscheidet, ob der letzte Zustand wiederhergestellt wird).
+    Benötigt: zwei Shelly-Ereignis-Entitäten mit event_type-Werten
+    single_push, double_push, long_push, btn_up sowie einen Umschalt-Helfer
+    (input_boolean). Die Wiederholung stoppt bei btn_up per mode: restart.
+    Achtung: Manche Shelly-Modelle melden long_push erst beim Loslassen
+    oder bieten kein btn_up; damit ist Halten-Dimmen nicht möglich.
+  domain: automation
+  input:
+    button_1:
+      name: Taster 1 – Ereignis-Entität
+      selector:
+        entity:
+          domain: event
+    button_2:
+      name: Taster 2 – Ereignis-Entität
+      selector:
+        entity:
+          domain: event
+    lights:
+      name: Hue-Leuchte(n) / Lichtgruppe
+      selector:
+        target:
+          entity:
+            domain: light
+    mode_helper:
+      name: Umschalt-Helfer (AUS = Helligkeit, EIN = Farbtemperatur)
+      selector:
+        entity:
+          domain: input_boolean
+    step_delay:
+      name: Schrittintervall in Sekunden
+      default: 0.2
+      selector:
+        number:
+          min: 0.1
+          max: 2
+          step: 0.05
+          mode: slider
+          unit_of_measurement: s
+    brightness_step:
+      name: Helligkeitsschritt in Prozent
+      default: 3
+      selector:
+        number:
+          min: 1
+          max: 15
+          step: 1
+          mode: slider
+          unit_of_measurement: "%"
+    kelvin_step:
+      name: Farbtemperaturschritt in Kelvin
+      default: 75
+      selector:
+        number:
+          min: 25
+          max: 300
+          step: 25
+          mode: slider
+          unit_of_measurement: K
+    profiles_enabled:
+      name: Tagesprofile beim Einschalten aktivieren
+      default: false
+      selector:
+        boolean: {}
+    morning_start:
+      name: Beginn Morgen
+      default: "05:00:00"
+      selector:
+        time: {}
+    noon_start:
+      name: Beginn Mittag
+      default: "10:00:00"
+      selector:
+        time: {}
+    evening_start:
+      name: Beginn Abend
+      default: "17:00:00"
+      selector:
+        time: {}
+    morning_brightness:
+      name: Morgen – Helligkeit (%)
+      default: 35
+      selector:
+        number:
+          min: 1
+          max: 100
+          step: 1
+          mode: slider
+    morning_kelvin:
+      name: Morgen – Farbtemperatur (K)
+      default: 2700
+      selector:
+        number:
+          min: 2000
+          max: 6500
+          step: 100
+          mode: slider
+    noon_brightness:
+      name: Mittag – Helligkeit (%)
+      default: 100
+      selector:
+        number:
+          min: 1
+          max: 100
+          step: 1
+          mode: slider
+    noon_kelvin:
+      name: Mittag – Farbtemperatur (K)
+      default: 4500
+      selector:
+        number:
+          min: 2000
+          max: 6500
+          step: 100
+          mode: slider
+    evening_brightness:
+      name: Abend – Helligkeit (%)
+      default: 60
+      selector:
+        number:
+          min: 1
+          max: 100
+          step: 1
+          mode: slider
+    evening_kelvin:
+      name: Abend – Farbtemperatur (K)
+      default: 3000
+      selector:
+        number:
+          min: 2000
+          max: 6500
+          step: 100
+          mode: slider
+
+mode: restart
+max_exceeded: silent
+
+triggers:
+  - trigger: state
+    entity_id: !input button_1
+    id: one
+  - trigger: state
+    entity_id: !input button_2
+    id: two
+
+variables:
+  light_target: !input lights
+  mode_entity: !input mode_helper
+  interval: !input step_delay
+  brightness_increment: !input brightness_step
+  kelvin_increment: !input kelvin_step
+  use_profiles: !input profiles_enabled
+  morning_at: !input morning_start
+  noon_at: !input noon_start
+  evening_at: !input evening_start
+  morning_pct: !input morning_brightness
+  morning_k: !input morning_kelvin
+  noon_pct: !input noon_brightness
+  noon_k: !input noon_kelvin
+  evening_pct: !input evening_brightness
+  evening_k: !input evening_kelvin
+  event_type: "{{ trigger.to_state.attributes.event_type | default('', true) if trigger.to_state is not none else '' }}"
+  is_one: "{{ trigger.id == 'one' }}"
+  selected_entities: >-
+    {{ expand(light_target.entity_id | default([])) | map(attribute='entity_id') | list }}
+  primary_light: "{{ selected_entities | first | default('') }}"
+  min_kelvin: >-
+    {{ state_attr(primary_light, 'min_color_temp_kelvin') | int(2000) }}
+  max_kelvin: >-
+    {{ state_attr(primary_light, 'max_color_temp_kelvin') | int(6500) }}
+
+actions:
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ event_type == 'double_push' }}"
+        sequence:
+          - action: input_boolean.toggle
+            target:
+              entity_id: !input mode_helper
+      - conditions:
+          - condition: template
+            value_template: "{{ event_type == 'single_push' and is_one }}"
+        sequence:
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ use_profiles }}"
+                sequence:
+                  - variables:
+                      active_period: >-
+                        {% set t = now().strftime('%H:%M:%S') %}
+                        {% if morning_at <= t < noon_at %}morning
+                        {% elif noon_at <= t < evening_at %}noon
+                        {% else %}evening{% endif %}
+                      profile_brightness: >-
+                        {{ morning_pct if active_period == 'morning' else noon_pct if active_period == 'noon' else evening_pct }}
+                      profile_kelvin: >-
+                        {{ morning_k if active_period == 'morning' else noon_k if active_period == 'noon' else evening_k }}
+                  - action: light.turn_on
+                    target: !input lights
+                    data:
+                      brightness_pct: "{{ profile_brightness | int }}"
+                      color_temp_kelvin: "{{ profile_kelvin | int }}"
+            default:
+              - action: light.turn_on
+                target: !input lights
+      - conditions:
+          - condition: template
+            value_template: "{{ event_type == 'single_push' and not is_one }}"
+        sequence:
+          - action: light.turn_off
+            target: !input lights
+      - conditions:
+          - condition: template
+            value_template: "{{ event_type == 'long_push' }}"
+        sequence:
+          - repeat:
+              sequence:
+                - choose:
+                    - conditions:
+                        - condition: state
+                          entity_id: !input mode_helper
+                          state: "off"
+                      sequence:
+                        - action: light.turn_on
+                          target: !input lights
+                          data:
+                            brightness_step_pct: >-
+                              {{ brightness_increment | int if is_one else -(brightness_increment | int) }}
+                            transition: "{{ interval | float }}"
+                  default:
+                    - condition: template
+                      value_template: "{{ primary_light != '' }}"
+                    - variables:
+                        current_kelvin: >-
+                          {{ state_attr(primary_light, 'color_temp_kelvin') | int(3000) }}
+                        next_kelvin: >-
+                          {% set delta = -(kelvin_increment | int) if is_one else (kelvin_increment | int) %}
+                          {{ [[(current_kelvin | int) + delta, min_kelvin | int] | max, max_kelvin | int] | min }}
+                    - action: light.turn_on
+                      target: !input lights
+                      data:
+                        color_temp_kelvin: "{{ next_kelvin | int }}"
+                        transition: "{{ interval | float }}"
+                - delay:
+                    seconds: "{{ interval | float }}"
+              until:
+                - condition: template
+                  value_template: "{{ false }}"
+      # btn_up intentionally has no action: mode restart cancels an active repeat.
